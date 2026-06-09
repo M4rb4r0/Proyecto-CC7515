@@ -1,0 +1,34 @@
+#pragma kernel DeformMesh
+
+struct VertexData
+{
+    float3 position;
+    float3 normal;
+};
+
+// Buffer original inmutable (Solo Lectura)
+StructuredBuffer<VertexData> baseBuffer;
+// Buffer de trabajo que modificamos (Lectura/Escritura)
+RWStructuredBuffer<VertexData> vertexBuffer;
+
+float time;
+float waveSpeed;
+float waveHeight;
+
+[numthreads(256, 1, 1)]
+void DeformMesh(uint3 id : SV_DispatchThreadID)
+{
+    // 1. Extraemos la posición y la normal original inmutable
+    float3 originalPos = baseBuffer[id.x].position;
+    float3 originalNormal = baseBuffer[id.x].normal;
+    
+    // 2. Onda radial usando el eje Y de la esfera original como semilla
+    float displacement = sin(originalPos.y * waveSpeed + time) * waveHeight;
+    
+    // 3. Deformación 3D
+    // el vértice en la dirección de su normal.
+    float3 newPos = originalPos + (originalNormal * displacement);
+    
+    // 4. Escribimos el resultado de vuelta a la VRAM
+    vertexBuffer[id.x].position = newPos;
+}
