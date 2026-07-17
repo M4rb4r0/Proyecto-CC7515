@@ -629,8 +629,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DeformadorGPU
   deformShader: {fileID: 7200000, guid: dde1ed7c69b01864c8485376280f19c8, type: 3}
-  waveSpeed: 10000
-  waveHeight: 0.005
+  waveSpeed: 1000
+  waveHeight: 0.01
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

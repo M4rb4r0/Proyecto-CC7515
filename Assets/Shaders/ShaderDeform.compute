@@ -24,7 +24,10 @@ void DeformMesh(uint3 id : SV_DispatchThreadID)
     float3 originalNormal = baseBuffer[id.x].normal;
     
     // Usamos X, Y y Z combinados
-    float onda = sin((float) id.x * 0.5 + time * 10.0);
+    float onda = sin(
+        originalPos.x * waveSpeed +
+        time * 2.0
+    );
     float displacement = onda * waveHeight;
     
     float3 newPos = originalPos;

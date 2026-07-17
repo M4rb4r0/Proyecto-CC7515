@@ -15,6 +15,7 @@ Shader "Custom/GPULitAndShadows"
         {
             Tags { "LightMode"="ForwardBase" }
 
+
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
