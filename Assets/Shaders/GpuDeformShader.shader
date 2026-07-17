@@ -2,12 +2,13 @@ Shader "Custom/GPULitAndShadows"
 {
     Properties
     {
-        _Color ("Color Base", Color) = (0.2, 0.6, 1.0, 1)
-
+        _Color ("Color Base", Color) = (1, 1, 1, 1)
+        _MainTex ("Textura", 2D) = "white" {}
     }
     SubShader
     {
         Tags { "RenderType"="Opaque" }
+        Cull Off
 
         // ==========================================
         // PASE 1: ILUMINACIÓN Y COLOR
@@ -25,28 +26,50 @@ Shader "Custom/GPULitAndShadows"
             #include "UnityCG.cginc"
             #include "UnityLightingCommon.cginc"
 
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float4 _Color;
+
             struct VertexData {
                 float3 position;
                 float3 normal;
             };
 
             StructuredBuffer<VertexData> vertexBuffer;
-            float4 _Color;
+
+            // recibir texturas
+            struct appdata
+            {
+                float2 uv : TEXCOORD0;
+                uint id : SV_VertexID;
+            };
 
             struct v2f
             {
                 float4 pos : SV_POSITION;
                 float3 worldNormal : TEXCOORD0;
+                float2 uv : TEXCOORD1;
             };
 
-            v2f vert (uint id : SV_VertexID)
+            v2f vert(appdata v)
             {
                 v2f o;
-                float3 gpuPosition = vertexBuffer[id].position;
-                float3 gpuNormal = vertexBuffer[id].normal;
 
-                o.pos = UnityObjectToClipPos(float4(gpuPosition, 1.0));
-                o.worldNormal = UnityObjectToWorldNormal(gpuNormal);
+                float3 gpuPosition =
+                    vertexBuffer[v.id].position;
+
+                float3 gpuNormal =
+                    vertexBuffer[v.id].normal;
+
+                o.pos = UnityObjectToClipPos(
+                    float4(gpuPosition, 1.0)
+                );
+
+                o.worldNormal =
+                    UnityObjectToWorldNormal(gpuNormal);
+
+                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+
                 return o;
             }
 
@@ -58,8 +81,11 @@ Shader "Custom/GPULitAndShadows"
                 
                 float3 ambient = ShadeSH9(half4(normal, 1.0));
                 float3 lighting = ambient + (_LightColor0.rgb * NdotL);
+
+                fixed4 textureColor = tex2D(_MainTex, i.uv);
+                fixed4 baseColor = textureColor * _Color;
                 
-                return fixed4(_Color.rgb * lighting, _Color.a);
+                return fixed4(baseColor.rgb * lighting, baseColor.a);
             }
             ENDCG
         }

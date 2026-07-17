@@ -120,6 +120,7 @@ public class DeformadorGPUSmall : MonoBehaviour
         deformShader.SetBuffer(faceNormalKernelID, "vertexBuffer", vertexBuffer);
         deformShader.SetBuffer(faceNormalKernelID, "triangleIndices", triangleIndices);
         deformShader.SetBuffer(faceNormalKernelID, "faceNormalBuffer", faceNormalBuffer);
+        deformShader.SetBuffer(faceNormalKernelID, "baseBuffer", baseBuffer);
 
         deformShader.SetBuffer(vtxNormalKernelID, "faceNormalBuffer", faceNormalBuffer);
         deformShader.SetBuffer(vtxNormalKernelID, "vertexBuffer", vertexBuffer);
