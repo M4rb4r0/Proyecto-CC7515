@@ -1,10 +1,13 @@
 #pragma kernel DeformMesh
+#pragma kernel ComputeFaceNormals
+#pragma kernel ComputeVertexNormals
 
 struct VertexData
 {
     float3 position;
     float3 normal;
 };
+
 
 StructuredBuffer<VertexData> baseBuffer;
 RWStructuredBuffer<VertexData> vertexBuffer;
@@ -37,4 +40,74 @@ void DeformMesh(uint3 id : SV_DispatchThreadID)
     
     vertexBuffer[id.x].position = newPos;
     vertexBuffer[id.x].normal = newNormal;
+}
+
+// Tres índices por triángulo.
+StructuredBuffer<int> triangleIndices;
+
+// Una normal temporal por triángulo.
+RWStructuredBuffer<float4> faceNormalBuffer;
+
+int triangleCount;
+
+
+// el id indica cual triangulo es
+[numthreads(256, 1, 1)]
+void ComputeFaceNormals(uint3 id: SV_DispatchThreadID){
+    uint triangleId = id.x;
+    if(triangleId >= (uint)triangleCount){
+        return;
+    }
+
+    int i0 = triangleIndices[3*triangleId + 0];
+    int i1 = triangleIndices[3*triangleId + 1];
+    int i2 = triangleIndices[3*triangleId + 2];
+
+    float3 p0 = vertexBuffer[i0].position;
+    float3 p1 = vertexBuffer[i1].position;
+    float3 p2 = vertexBuffer[i2].position;
+
+    float3 edge1 = p1 - p0;
+    float3 edge2 = p2 - p0;
+
+    float3 faceNormal = cross(edge1, edge2);
+
+    // no normalizamos para que la normal del vertice quede bn
+    faceNormalBuffer[triangleId] = float4(faceNormal, 0.0);
+}
+
+StructuredBuffer<int> incidentOffsets;
+StructuredBuffer<int> incidentTriangles;
+
+// se ejecuta un thread por vertice
+[numthreads(256, 1, 1)]
+void ComputeVertexNormals(uint3 id: SV_DispatchThreadID){
+    uint vertexId = id.x;
+    if(vertexId >= (uint)vertexCount){
+        return;
+    }
+
+    int from = incidentOffsets[vertexId];
+    int to = incidentOffsets[vertexId+1];
+
+    float3 ans = float3(0.0, 0.0, 0.0);
+
+    // sumar todas las normales de los triangulos incidentes
+    for(int k = from; k<to; k++){
+        int triangleId = incidentTriangles[k];
+        ans += faceNormalBuffer[triangleId].xyz; // xyz pq son 4 dimensiones por alguna razon...
+    }
+
+    float sqlength = dot(ans, ans);
+
+    // caso degenerado
+    if(sqlength < 1e-20){
+        vertexBuffer[vertexId].normal = baseBuffer[vertexId].normal;
+        return;
+    }
+    
+    VertexData vtx = vertexBuffer[vertexId];
+    vtx.normal = ans * rsqrt(sqlength);
+
+    vertexBuffer[vertexId] = vtx;
 }

@@ -3,6 +3,7 @@ Shader "Custom/GPULitAndShadows"
     Properties
     {
         _Color ("Color Base", Color) = (0.2, 0.6, 1.0, 1)
+
     }
     SubShader
     {
