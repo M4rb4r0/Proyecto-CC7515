@@ -1,14 +1,121 @@
-// Each #kernel tells which function to compile; you can have many kernels
-#pragma kernel CSMain
+#pragma kernel InitializeSums
+#pragma kernel ReduceSums
+#pragma kernel FinalizeCentroid
+#pragma kernel ScaleFromCentroid
 
-// Create a RenderTexture with enableRandomWrite flag and set it
-// with cs.SetTexture
-RWTexture2D<float4> Result;
-
-[numthreads(8,8,1)]
-void CSMain (uint3 id : SV_DispatchThreadID)
+struct VertexData
 {
-    // TODO: insert actual code here!
+    float3 position;
+    float3 normal;
+};
 
-    Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+StructuredBuffer<VertexData> baseBuffer;
+RWStructuredBuffer<VertexData> vertexBuffer;
+
+// buffers para hacer la reduccion a todo gas en logn
+StructuredBuffer<float4> inputSums;
+RWStructuredBuffer<float4> outputSums;
+
+// buffer con las sumas finales por cada dimension
+StructuredBuffer<float4> finalSums;
+
+// contiene un solo elemento:
+// xyz = centroide
+// w   = placeholder
+RWStructuredBuffer<float4> centroidBuffer;
+
+int vertexCount;
+int inputCount;
+
+float time;
+float scaleSpeed;
+float scaleAmplitude;
+
+// copia info entre buffers, cada thread copia una posicion
+[numthreads(256, 1, 1)]
+void InitializeSums(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+
+    if (index >= (uint)vertexCount)
+        return;
+
+    outputSums[index] =
+        float4(baseBuffer[index].position, 0.0);
+}
+
+// cada thread combina sumas de a pares adyacentes
+[numthreads(256, 1, 1)]
+void ReduceSums(uint3 id : SV_DispatchThreadID)
+{
+    uint outputIndex = id.x;
+    uint firstIndex = 2u * outputIndex;
+
+    if (firstIndex >= (uint)inputCount)
+        return;
+
+    float3 sum = inputSums[firstIndex].xyz;
+
+    uint secondIndex = firstIndex + 1u;
+
+    if (secondIndex < (uint)inputCount)
+    {
+        sum += inputSums[secondIndex].xyz;
+    }
+
+    outputSums[outputIndex] =
+        float4(sum, 0.0);
+}
+
+// divide por N
+[numthreads(1, 1, 1)]
+void FinalizeCentroid(uint3 id : SV_DispatchThreadID)
+{
+    if (vertexCount <= 0)
+    {
+        centroidBuffer[0] =
+            float4(0.0, 0.0, 0.0, 1.0);
+
+        return;
+    }
+
+    float3 totalPosition =
+        finalSums[0].xyz;
+
+    centroidBuffer[0] = float4(
+        totalPosition / (float)vertexCount,
+        1.0
+    );
+}
+
+[numthreads(256, 1, 1)]
+void ScaleFromCentroid(uint3 id : SV_DispatchThreadID)
+{
+    uint vertexId = id.x;
+
+    if (vertexId >= (uint)vertexCount)
+        return;
+
+    VertexData result = baseBuffer[vertexId];
+
+    float3 meshCenter = centroidBuffer[0].xyz;
+
+    float scaleFactor =
+        1.0 +
+        scaleAmplitude *
+        sin(time * scaleSpeed);
+
+    scaleFactor = max(scaleFactor, 0.01);
+
+    float3 relativePosition =
+        result.position - meshCenter;
+
+    result.position =
+        meshCenter +
+        relativePosition * scaleFactor;
+
+    result.normal =
+        baseBuffer[vertexId].normal;
+
+    vertexBuffer[vertexId] = result;
 }
