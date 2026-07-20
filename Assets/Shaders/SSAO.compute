@@ -1,6 +1,22 @@
 #pragma kernel ComputeAO
+#pragma kernel BlurAO
+
+Texture2D<float4> positionTexture;
+Texture2D<float4> normalTexture;
+
+StructuredBuffer<float4> sampleKernel;
 
 RWTexture2D<float> aoOutput;
+Texture2D<float4> noiseTexture;
+
+int noiseTextureSize;
+
+float4x4 projectionMatrix;
+
+float sampleRadius;
+float bias;
+
+int sampleCount;
 
 [numthreads(8, 8, 1)]
 void ComputeAO(uint3 id : SV_DispatchThreadID)
@@ -10,9 +26,115 @@ void ComputeAO(uint3 id : SV_DispatchThreadID)
 
     aoOutput.GetDimensions(width, height);
 
-    if (id.x >= width || id.y >= height)
-        return;
+    if (id.x >= width || id.y >= height) return;
 
-    // AO = 1 significa que no hay oclusión.
-    aoOutput[id.xy] = 1.0;
+    float4 positionData = positionTexture.Load(int3(id.xy, 0));
+    
+    if (positionData.w == 0.0){
+        aoOutput[id.xy] = 1.0;
+        return;
+    }
+
+    float3 viewPosition = positionData.xyz;
+    float3 viewNormal = normalize(normalTexture.Load(int3(id.xy, 0)).xyz);
+
+    /*
+     * sistema de coordenadas local:
+     * tangent   = X local
+     * bitangent = Y local
+     * normal    = Z local
+     */
+
+    uint2 noisePixel = uint2(id.x % (uint)noiseTextureSize, id.y % (uint)noiseTextureSize);
+    float3 randomVector = noiseTexture.Load(int3(noisePixel, 0)).xyz;
+    float3 tangentCandidate = randomVector - viewNormal * dot(randomVector, viewNormal);
+
+    // caso cringe
+    if (dot(tangentCandidate, tangentCandidate) < 0.000001){
+        float3 helper = abs(viewNormal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+        tangentCandidate = cross(helper, viewNormal);
+    }
+
+    float3 tangent = normalize(tangentCandidate);
+    float3 bitangent = normalize(cross(viewNormal, tangent));
+    float occlusion = 0.0;
+
+    for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex){
+        float3 localSample = sampleKernel[sampleIndex].xyz;
+
+        // espacio local -> view space
+        float3 sampleDirection = localSample.y * bitangent + localSample.z * viewNormal;
+
+        float3 samplePosition = viewPosition + sampleDirection * sampleRadius;
+
+        // view space a clip space
+        float4 clipPosition = mul(projectionMatrix, float4(samplePosition, 1.0));
+
+        if (clipPosition.w <= 0.0) continue;
+
+        float2 sampleUV = clipPosition.xy / clipPosition.w;
+
+        sampleUV = sampleUV * 0.5 + 0.5;
+
+        sampleUV.y = 1.0 - sampleUV.y;
+
+        bool insideScreen =
+            sampleUV.x >= 0.0 &&
+            sampleUV.x <= 1.0 &&
+            sampleUV.y >= 0.0 &&
+            sampleUV.y <= 1.0;
+
+        if (!insideScreen) continue;
+
+        uint2 samplePixel = uint2(sampleUV.x * width, sampleUV.y * height);
+
+        samplePixel = min(samplePixel, uint2(width - 1, height - 1));
+        float4 scenePositionData = positionTexture.Load(int3(samplePixel, 0));
+
+        if (scenePositionData.w == 0.0) continue;
+
+        float sceneDepth = scenePositionData.z;
+        float expectedDepth = samplePosition.z;
+
+        bool blocked = sceneDepth >= expectedDepth + bias;
+
+        // diferencia entre la profundidad del punto original y la superficie encontrada
+        float depthDifference = abs(viewPosition.z - sceneDepth);
+        float rangeCheck = smoothstep(0.0, 1.0, sampleRadius / max(depthDifference, 0.00001));
+
+        if (blocked){
+            occlusion += rangeCheck;
+        }
+    }
+
+    float safeSampleCount = max((float)sampleCount, 1.0);
+    float ao = 1.0 - occlusion / safeSampleCount;
+
+    aoOutput[id.xy] = saturate(ao);
+}
+
+
+Texture2D<float> aoInput;
+RWTexture2D<float> aoBlurOutput;
+
+[numthreads(8, 8, 1)]
+void BlurAO(uint3 id : SV_DispatchThreadID)
+{
+    uint width;
+    uint height;
+    aoBlurOutput.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    float sum = 0.0;
+    int validSamples = 0;
+ 
+    for (int offsetY = -2; offsetY < 2; ++offsetY){
+        for (int offsetX = -2; offsetX < 2; ++offsetX){
+            int2 samplePixel = int2(id.xy) + int2(offsetX, offsetY);
+            samplePixel = clamp(samplePixel, int2(0, 0), int2(width - 1, height - 1));
+            sum += aoInput.Load(int3(samplePixel, 0));
+            validSamples++;
+        }
+    }
+
+    aoBlurOutput[id.xy] = sum / validSamples;
 }

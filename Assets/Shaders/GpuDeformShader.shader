@@ -30,7 +30,7 @@ Shader "Custom/GPULitAndShadows"
             #include "UnityLightingCommon.cginc"
 
             sampler2D _MainTex;
-            sampler2D _AOTexture;
+            Texture2D<float> _AOTexture;
             float4 _MainTex_ST;
             float4 _Color;
 
@@ -76,8 +76,17 @@ Shader "Custom/GPULitAndShadows"
                 float3 lightDir = normalize(_WorldSpaceLightPos0.xyz);
                 float NdotL = max(0.0, dot(normal, lightDir));
 
-                float2 screenUV = i.screenPosition.xy / i.screenPosition.w;
-                float ao = tex2D(_AOTexture, screenUV).r;
+                uint aoWidth;
+                uint aoHeight;
+                _AOTexture.GetDimensions(aoWidth, aoHeight);
+
+                int2 aoPixel = int2(i.pos.xy);
+                aoPixel = clamp(aoPixel, int2(0, 0), int2((int)aoWidth - 1, (int)aoHeight - 1));
+
+                float ao = _AOTexture.Load(int3(aoPixel, 0));
+
+                // debug
+                //return fixed4(ao, ao, ao, 1.0);
                 
                 float3 ambient = ShadeSH9(half4(normal, 1.0));
                 ambient *= ao;
@@ -121,14 +130,13 @@ Shader "Custom/GPULitAndShadows"
 
             StructuredBuffer<VertexData> vertexBuffer;
 
-            // Datos enviados desde el vertex shader
-            // hacia el fragment shader.
+            // datos enviados desde el vertex shader hacia el fragment shader
             struct v2fGBuffer
             {
-                // Posición usada por el rasterizador.
+                //posicion usada por el rasterizador
                 float4 clipPosition : SV_POSITION;
 
-                // Datos geométricos interpolados por píxel.
+                // datos interpolados por pixel
                 float3 viewPosition : TEXCOORD0;
                 float3 viewNormal   : TEXCOORD1;
             };
@@ -143,18 +151,16 @@ Shader "Custom/GPULitAndShadows"
 
                 float4 objectPosition4 = float4(objectPosition, 1.0);
 
-                // Posición en clip space:
-                // permite rasterizar el triángulo.
+                // pos. en clip space
                 output.clipPosition = UnityObjectToClipPos(objectPosition4);
 
-                // Posición respecto de la cámara.
+                // pos. rspecto de la camara
                 output.viewPosition = mul(UNITY_MATRIX_MV, objectPosition4).xyz;
 
-                // Primero transformamos la normal desde
-                // object space hacia world space.
+                // normal: object -> world space
                 float3 worldNormal = UnityObjectToWorldNormal(objectNormal);
 
-                // Luego desde world space hacia view space.
+                // world space -> view space
                 output.viewNormal = normalize(mul((float3x3)UNITY_MATRIX_V, worldNormal));
                 return output;
             }
@@ -211,19 +217,13 @@ Shader "Custom/GPULitAndShadows"
                 v2f o;
                 float3 gpuPosition = vertexBuffer[id].position;
                 float3 gpuNormal = vertexBuffer[id].normal;
-
-                // 1. Calculamos la posición de la sombra basados en la luz de forma manual
                 float4 clipPos = UnityClipSpaceShadowCasterPos(float4(gpuPosition, 1.0), gpuNormal);
-                
-                // 2. Aplicamos el sesgo para evitar errores visuales
                 o.pos = UnityApplyLinearShadowBias(clipPos);
                 
                 return o;
             }
 
-            float4 frag(v2f i) : SV_Target
-            {
-                // El pase de sombras no pinta colores, solo recorta la silueta, por lo que devolvemos 0
+            float4 frag(v2f i) : SV_Target{
                 return 0; 
             }
             ENDCG

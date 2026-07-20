@@ -26,6 +26,22 @@ public class SSAOController : MonoBehaviour
     private RenderTexture aoRenderTexture;
     private int computeAOKernel;
 
+    [SerializeField, Min(0.001f)]
+    private float sampleRadius = 0.3f;
+
+    [SerializeField, Min(0.0f)]
+    private float bias = 0.005f;
+
+    [SerializeField, Range(1, 64)]
+    private int sampleCount = 32;
+    private ComputeBuffer sampleKernelBuffer;
+
+    private Texture2D noiseTexture;
+    private const int NoiseTextureSize = 4;
+
+    private RenderTexture aoBlurredRenderTexture;
+    private int blurAOKernel;
+
     private void OnEnable(){
         targetCamera = GetComponent<Camera>();
 
@@ -36,7 +52,9 @@ public class SSAOController : MonoBehaviour
         }
 
         computeAOKernel = ssaoCompute.FindKernel("ComputeAO");
-
+        blurAOKernel = ssaoCompute.FindKernel("BlurAO");
+        CreateSampleKernel();
+        CreateNoiseTexture();
         CreateRenderTextures();
         CreateGBufferCommandBuffer();
     }
@@ -93,14 +111,38 @@ public class SSAOController : MonoBehaviour
         // fix
         aoRenderTexture.enableRandomWrite = true;
 
+        aoBlurredRenderTexture = new RenderTexture(
+            currentWidth,
+            currentHeight,
+            0,
+            RenderTextureFormat.RFloat
+        );
+
+        aoBlurredRenderTexture.name =
+            "SSAO Blurred Texture";
+
+        aoBlurredRenderTexture.filterMode =
+            FilterMode.Bilinear;
+
+        aoBlurredRenderTexture.wrapMode =
+            TextureWrapMode.Clamp;
+
+        aoBlurredRenderTexture.enableRandomWrite =
+            true;
+
+        aoBlurredRenderTexture.Create();
+
         aoRenderTexture.Create();
     }
     private void OnDisable(){
         ReleaseGBufferCommandBuffer();
         ReleaseRenderTextures();
+        ReleaseSampleKernel();
+        ReleaseNoiseTexture();
     }
 
     private void ReleaseRenderTextures(){
+        // boilerplate
         if (positionTexture != null){
             positionTexture.Release();
             Destroy(positionTexture);
@@ -117,6 +159,13 @@ public class SSAOController : MonoBehaviour
             aoRenderTexture.Release();
             Destroy(aoRenderTexture);
             aoRenderTexture = null;
+        }
+
+        if (aoBlurredRenderTexture != null)
+        {
+            aoBlurredRenderTexture.Release();
+            Destroy(aoBlurredRenderTexture);
+            aoBlurredRenderTexture = null;
         }
     }
 
@@ -154,16 +203,76 @@ public class SSAOController : MonoBehaviour
         gBufferCommandBuffer.SetComputeTextureParam(
             ssaoCompute,
             computeAOKernel,
+            "positionTexture",
+            positionTexture
+        );
+
+        gBufferCommandBuffer.SetComputeTextureParam(
+            ssaoCompute,
+            computeAOKernel,
+            "normalTexture",
+            normalTexture
+        );
+
+        gBufferCommandBuffer.SetComputeTextureParam(
+            ssaoCompute,
+            computeAOKernel,
             "aoOutput",
             aoRenderTexture
         );
 
-        int threadGroupsX =
-            Mathf.CeilToInt(currentWidth / 8.0f);
+        int threadGroupsX = Mathf.CeilToInt(currentWidth / 8.0f);
 
-        int threadGroupsY =
-            Mathf.CeilToInt(currentHeight / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(currentHeight / 8.0f);
 
+        Matrix4x4 gpuProjectionMatrix = GL.GetGPUProjectionMatrix(targetCamera.projectionMatrix, true);
+
+        // cargar las variables del compute shader
+        gBufferCommandBuffer.SetComputeMatrixParam(
+            ssaoCompute,
+            "projectionMatrix",
+            gpuProjectionMatrix
+        );
+
+        gBufferCommandBuffer.SetComputeFloatParam(
+            ssaoCompute,
+            "sampleRadius",
+            sampleRadius
+        );
+
+        gBufferCommandBuffer.SetComputeFloatParam(
+            ssaoCompute,
+            "bias",
+            bias
+        );
+
+        gBufferCommandBuffer.SetComputeBufferParam(
+            ssaoCompute,
+            computeAOKernel,
+            "sampleKernel",
+            sampleKernelBuffer
+        );
+
+        gBufferCommandBuffer.SetComputeIntParam(
+            ssaoCompute,
+            "sampleCount",
+            sampleCount
+        );
+
+        gBufferCommandBuffer.SetComputeTextureParam(
+            ssaoCompute,
+            computeAOKernel,
+            "noiseTexture",
+            noiseTexture
+        );
+
+        gBufferCommandBuffer.SetComputeIntParam(
+            ssaoCompute,
+            "noiseTextureSize",
+            NoiseTextureSize
+);
+
+        // dispatch kernel
         gBufferCommandBuffer.DispatchCompute(
             ssaoCompute,
             computeAOKernel,
@@ -171,7 +280,29 @@ public class SSAOController : MonoBehaviour
             threadGroupsY,
             1
         );
-        targetMaterial.SetTexture("_AOTexture", aoRenderTexture);
+
+        gBufferCommandBuffer.SetComputeTextureParam(
+            ssaoCompute,
+            blurAOKernel,
+            "aoInput",
+            aoRenderTexture
+        );
+
+        gBufferCommandBuffer.SetComputeTextureParam(
+            ssaoCompute,
+            blurAOKernel,
+            "aoBlurOutput",
+            aoBlurredRenderTexture
+        );
+
+        gBufferCommandBuffer.DispatchCompute(
+            ssaoCompute,
+            blurAOKernel,
+            threadGroupsX,
+            threadGroupsY,
+            1
+        );
+        targetMaterial.SetTexture("_AOTexture", aoBlurredRenderTexture);
         targetCamera.AddCommandBuffer(CameraEvent.BeforeForwardOpaque, gBufferCommandBuffer);
     }
 
@@ -182,4 +313,88 @@ public class SSAOController : MonoBehaviour
         gBufferCommandBuffer.Release();
         gBufferCommandBuffer = null;
     }
-}
+
+    private void CreateSampleKernel(){
+        ReleaseSampleKernel();
+
+        Vector4[] samples = new Vector4[sampleCount];
+
+        System.Random random = new System.Random(99824435);
+
+        for (int i = 0; i < sampleCount; ++i){
+            Vector3 sample = new Vector3(
+                (float)(random.NextDouble() * 2.0 - 1.0),
+                (float)(random.NextDouble() * 2.0 - 1.0),
+                (float)random.NextDouble()
+            );
+
+            sample.Normalize();
+
+            // sampleamos dentro de la semiesfera
+            sample *= (float)random.NextDouble();
+            float t = sampleCount > 1 ? i / (float)(sampleCount - 1): 0.0f;
+            float scale = Mathf.Lerp(0.1f, 1.0f, t * t);
+            sample *= scale;
+
+            samples[i] = new Vector4(
+                sample.x,
+                sample.y,
+                sample.z,
+                0.0f
+            );
+        }
+
+        sampleKernelBuffer = new ComputeBuffer(
+            sampleCount,
+            sizeof(float) * 4
+        );
+
+        sampleKernelBuffer.SetData(samples);
+    }
+
+    private void ReleaseSampleKernel(){
+        if (sampleKernelBuffer == null) return;
+
+        sampleKernelBuffer.Release();
+        sampleKernelBuffer = null;
+    }
+
+    private void CreateNoiseTexture(){
+        ReleaseNoiseTexture();
+
+        int pixelCount =
+            NoiseTextureSize * NoiseTextureSize;
+
+        Color[] noisePixels = new Color[pixelCount];
+
+        System.Random random = new System.Random(54321);
+
+        for (int i = 0; i < pixelCount; ++i){
+            float x = (float)(random.NextDouble() * 2.0 - 1.0);
+            float y = (float)(random.NextDouble() * 2.0 - 1.0);
+            Vector2 direction = new Vector2(x, y).normalized;
+            noisePixels[i] = new Color(direction.x, direction.y, 0.0f, 0.0f);
+        }
+
+        noiseTexture = new Texture2D(
+            NoiseTextureSize,
+            NoiseTextureSize,
+            TextureFormat.RGBAFloat,
+            false,
+            true
+        );
+
+        noiseTexture.name = "SSAO Noise Texture";
+        noiseTexture.filterMode = FilterMode.Point;
+        noiseTexture.wrapMode = TextureWrapMode.Repeat;
+
+        noiseTexture.SetPixels(noisePixels);
+        noiseTexture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+    }
+
+    private void ReleaseNoiseTexture(){
+        if (noiseTexture == null) return;
+        Destroy(noiseTexture);
+        noiseTexture = null;
+    }
+}   
