@@ -1,0 +1,18 @@
+#pragma kernel ComputeAO
+
+RWTexture2D<float> aoOutput;
+
+[numthreads(8, 8, 1)]
+void ComputeAO(uint3 id : SV_DispatchThreadID)
+{
+    uint width;
+    uint height;
+
+    aoOutput.GetDimensions(width, height);
+
+    if (id.x >= width || id.y >= height)
+        return;
+
+    // AO = 1 significa que no hay oclusión.
+    aoOutput[id.xy] = 1.0;
+}
